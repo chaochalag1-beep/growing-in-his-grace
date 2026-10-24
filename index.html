@@ -96,7 +96,12 @@ $("continueBtn").onclick=async()=>{
     if(role==="host"){
       const snap=await get(ref(db,`rooms/${room}`));
       if(snap.exists()){alert("Room code already in use. Please create a new room.");show("setup");return;}
-      await set(ref(db,`rooms/${room}`),{hostId:playerId,hostName:name,status:"lobby",questionIndex:0,createdAt:serverTimestamp(),players:{[playerId]:{name,score:0,correct:0,joinedAt:serverTimestamp(),role:"host",used:{}}},answers:{}});
+      await set(ref(db,`rooms/${room}/hostId`),playerId);
+      await set(ref(db,`rooms/${room}/hostName`),name);
+      await set(ref(db,`rooms/${room}/status`),"lobby");
+      await set(ref(db,`rooms/${room}/questionIndex`),0);
+      await set(ref(db,`rooms/${room}/createdAt`),serverTimestamp());
+      await set(ref(db,`rooms/${room}/players/${playerId}`),{name,score:0,correct:0,joinedAt:serverTimestamp(),role:"host",used:{}});
     } else {
       const snap=await get(ref(db,`rooms/${room}`));
       if(!snap.exists()){alert("Room not found. Check the code with your host.");show("setup");return;}
@@ -110,7 +115,7 @@ $("continueBtn").onclick=async()=>{
   }
 };
 function renderLobby(){if(!state)return;$("roomCode").textContent=room;$("rolePill").textContent=role==="host"?"HOST":"PLAYER";$("lobbyTitle").textContent=role==="host"?"Your room is ready":"You joined the room";$("lobbyHint").textContent=role==="host"?"Share the code with everyone. Players can join from their phones.":"Waiting for the host to start the quiz.";const ps=Object.values(state.players||{});$("playerCount").textContent=`(${ps.length})`;$("lobbyPlayers").innerHTML=ps.map(p=>`<span class="pill">${esc(p.name)}${p.role==="host"?" · HOST":""}</span>`).join("");$("startBtn").classList.toggle("hidden",role!=="host");$("startBtn").disabled=ps.length<1;$("lobbyStatus").textContent=state.status==="lobby"?"Ready when you are!":`Question ${state.questionIndex+1} is in progress.`;if(state.status!=="lobby")show("game")}
-$("startBtn").onclick=async()=>{await update(ref(db,`rooms/${room}`),{status:"playing",questionIndex:0});};
+$("startBtn").onclick=async()=>{if(role!=="host"||state?.hostId!==playerId)return;await set(ref(db,`rooms/${room}/questionIndex`),0);await set(ref(db,`rooms/${room}/status`),"playing");};
 $("copyBtn").onclick=async()=>{try{await navigator.clipboard.writeText(room);$("lobbyStatus").textContent="Room code copied! Share it with players."}catch{$("lobbyStatus").textContent="Room code: "+room}};
 $("leaveBtn").onclick=async()=>{if(room)await set(ref(db,`rooms/${room}/players/${playerId}`),null);if(unsubRoom)unsubRoom();if(unsubPlayers)unsubPlayers();if(unsubAnswers)unsubAnswers();room=null;state=null;show("setup")};
 function renderGame(){if(!state||state.status!=="playing")return;show("game");const i=state.questionIndex||0,q=qs[i];if(!q)return;const me=(state.players||{})[playerId]||{};const myAnswer=((state.answers||{})[playerId]||{})[i];selected=myAnswer?myAnswer.choice:null;$("roundPill").textContent=`QUESTION ${i+1} / ${qs.length}`;$("category").textContent=q.cat;$("prize").textContent="$"+levels[i].toLocaleString();$("progressBar").style.width=((i+1)/qs.length*100)+"%";$("questionText").textContent=q.q+" / "+q.en;$("verseText").textContent="Bible reference: "+q.verse;$("answers").innerHTML=q.o.map((op,j)=>{const hidden=eliminated.includes(j);let cls="answer";if(selected===j)cls+=" selected";if(myAnswer&&j===q.a)cls+=" correct";if(myAnswer&&selected===j&&j!==q.a)cls+=" wrong";return `<button class="${cls}" data-choice="${j}" ${hidden||myAnswer?"disabled":""}><b>${"ABCD"[j]}</b>${esc(op)}</button>`}).join("");document.querySelectorAll("[data-choice]").forEach(b=>b.onclick=()=>answer(Number(b.dataset.choice)));$("answerStatus").textContent=myAnswer?(myAnswer.choice===q.a?`Correct! +$${levels[i].toLocaleString()}`:`Not quite. Correct answer: ${"ABCD"[q.a]}. ${q.o[q.a]}`):"Choose your answer. One attempt per question.";const isHost=role==="host"&&state.hostId===playerId;$("nextBtn").classList.toggle("hidden",!isHost);$("nextBtn").textContent=i===qs.length-1?"Finish Quiz":"Next Question (Host)";$("nextBtn").disabled=Object.keys(state.players||{}).some(id=>!((state.answers||{})[id]||{})[i]);$("fiftyBtn").disabled=!!(me.used&&me.used.fifty)||!!myAnswer;$("hintBtn").disabled=!!(me.used&&me.used.hint)||!!myAnswer;$("skipBtn").disabled=!!(me.used&&me.used.skip)||!!myAnswer;}
@@ -119,10 +124,10 @@ $("fiftyBtn").onclick=async()=>{const i=state.questionIndex,q=qs[i];eliminated=[
 $("hintBtn").onclick=async()=>{alert(qs[state.questionIndex].h);await markUsed("hint");renderGame()};
 $("skipBtn").onclick=async()=>{await markUsed("skip");await answer(-1)};
 async function markUsed(k){const me=(state.players||{})[playerId]||{};await update(ref(db,`rooms/${room}/players/${playerId}/used`),{...(me.used||{}),[k]:true})}
-$("nextBtn").onclick=async()=>{if(role!=="host")return;const i=state.questionIndex;if(i>=qs.length-1)await update(ref(db,`rooms/${room}`),{status:"finished"});else await update(ref(db,`rooms/${room}`),{questionIndex:i+1});eliminated=[]};
+$("nextBtn").onclick=async()=>{if(role!=="host"||state?.hostId!==playerId)return;const i=state.questionIndex;if(i>=qs.length-1)await set(ref(db,`rooms/${room}/status`),"finished");else await set(ref(db,`rooms/${room}/questionIndex`),i+1);eliminated=[]};
 $("leaderBtn").onclick=()=>{show("leaderboard");renderBoard()};
 $("backBtn").onclick=()=>show(state&&state.status==="playing"?"game":"lobby");
-$("finishBtn").onclick=async()=>{if(role==="host")await update(ref(db,`rooms/${room}`),{status:"finished"})};
+$("finishBtn").onclick=async()=>{if(role==="host"&&state?.hostId===playerId)await set(ref(db,`rooms/${room}/status`),"finished")};
 function sortedPlayers(){return Object.entries((state&&state.players)||{}).map(([id,p])=>({id,...p})).sort((a,b)=>(b.score||0)-(a.score||0)||(b.correct||0)-(a.correct||0)||String(a.name).localeCompare(String(b.name)))}
 function renderBoard(){if(!state)return;$("scoresBody").innerHTML=sortedPlayers().map((p,i)=>`<tr><td>${i+1}</td><td>${esc(p.name)}${p.id===state.hostId?" 👑":""}</td><td>$${(p.score||0).toLocaleString()}</td><td>${p.correct||0}/${qs.length}</td><td>${p.id===playerId?"You":(((state.answers||{})[p.id]||{})[state.questionIndex]?"Answered":"Playing")}</td></tr>`).join("");$("boardState").textContent=state.status==="finished"?"FINAL":"LIVE";$("finishBtn").classList.toggle("hidden",role!=="host")}
 function renderBoardIfVisible(){if(!$("leaderboard").classList.contains("hidden"))renderBoard()}
